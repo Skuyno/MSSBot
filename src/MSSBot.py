@@ -33,23 +33,19 @@ def update_status(message_id: str, text: str) -> str:
     return post_new(text)
 
 
-def edit(message_id: int, text: str) -> bool:
-    try:
-        resp = requests.post(
-            f"{API}/editMessageText",
-            data={"chat_id": CHAT_ID, "message_id": message_id,
-                  "text": text, "parse_mode": "HTML"},
-            timeout = 10,
-        ).json()
-    except requests.RequestException as exc:
-        print("Network exception:", exc)
-        return True
+def edit(message_id, text):
+    resp = tg_call("editMessageText", {
+        "chat_id": CHAT_ID, "message_id": message_id,
+        "text": text, "parse_mode": "HTML",
+    })
+    if resp is None:
+        return None
     if resp.get("ok"):
         return True
     desc = resp.get("description", "")
     if "message is not modified" in desc:
         return True
-    print("EditMessageText error:", desc)
+    print(time.strftime("%d.%m %H:%M:%S"), "edit error:", desc)
     return False
 
 
@@ -71,22 +67,20 @@ def build_text(players) -> str:
     lines += [f"• {html.escape(name)}" for name in players]
     return "\n".join(lines)
 
-def post_new(text: str):
-    try:
-        resp = requests.post(
-            f"{API}/sendMessage",
-            data={"chat_id": CHAT_ID, "message_thread_id": TOPIC_ID,
-                "text": text, "parse_mode": "HTML"},
-            timeout=10,
-        ).json()
-    except requests.RequestException as exc:
-        print("Network error (sendMessage):", exc)
-        return None
-    if resp.get("ok"):
+def post_new(text):
+    resp = tg_call("sendMessage", {
+        "chat_id": CHAT_ID, "message_thread_id": TOPIC_ID,
+        "text": text, "parse_mode": "HTML",
+    })
+    if resp and resp.get("ok"):
         mid = resp["result"]["message_id"]
-        save_message_id(mid)
+        try:
+            save_message_id(mid)
+        except OSError as exc:
+            print("Не смог сохранить state-файл:", exc)
         return mid
-    print("SendMessage error:", resp.get("description"))
+    if resp:
+        print("sendMessage error:", resp.get("description"))
     return None
 
 
@@ -99,13 +93,24 @@ def main() -> None:
 
     while True:
         time.sleep(POLL_SECONDS)
-        players = get_online()
+        try:
+            players = get_online()
+            if players == prev:
+                continue
+            new_id = update_status(message_id, build_text(players))
+            if new_id is not None:
+                message_id = new_id
+                prev = players
+        except Exception as exc:
+            print(time.strftime("%d.%m %H:%M:%S"), "loop error:", exc)
 
-        if players == prev:
-            continue
 
-        message_id = update_status(message_id, build_text(players))
-        prev = players
+def tg_call(method: str, data: dict):
+    try:
+        return requests.post(f"{API}/{method}", data=data, timeout=10).json()
+    except Exception as exc:
+        print(time.strftime("%d.%m %H:%M:%S"), f"{method} failed:", exc)
+        return None
 
 
 if __name__ == "__main__":
